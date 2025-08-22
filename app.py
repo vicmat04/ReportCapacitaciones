@@ -1,10 +1,10 @@
 import streamlit as st
 import pandas as pd
-from google.oauth2.service_account import Credentials
+from google.oauth2.service_account import Credentials # <-- Correcta
 import plotly.express as px
 import re
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+# La línea de oauth2client se eliminó
 from io import StringIO
 
 # ---------------- CONFIG ----------------
@@ -32,15 +32,33 @@ def unify_dinamizadores(df, col_cedula, col_nombre):
     return df
 
 def load_sheet():
-    scope = ["https://spreadsheets.google.com/feeds",
-             "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name(SERVICE_ACCOUNT_FILE, scope)
-    client = gspread.authorize(creds)
-    ws = client.open_by_key(SHEET_ID).worksheet(SHEET_NAME)
-    data = ws.get_all_values()
-    df = pd.DataFrame(data[1:], columns=data[0])
-    return df
-
+    """
+    Se conecta a Google Sheets usando los Secrets de Streamlit, 
+    abre la hoja correcta y la devuelve como un DataFrame.
+    """
+    try:
+        # Carga las credenciales desde los Secrets de Streamlit
+        creds = Credentials.from_service_account_info(
+            st.secrets["gcp_service_account"],
+            scopes=[
+                "https://spreadsheets.google.com/feeds",
+                "https://www.googleapis.com/auth/drive"
+            ],
+        )
+        # Autoriza y se conecta a gspread
+        client = gspread.authorize(creds)
+        
+        # Abre la hoja por ID y nombre y la convierte a DataFrame
+        ws = client.open_by_key(SHEET_ID).worksheet(SHEET_NAME)
+        data = ws.get_all_values()
+        df = pd.DataFrame(data[1:], columns=data[0])
+        return df
+        
+    except Exception as e:
+        st.error(f"Error al conectar con Google Sheets: {e}")
+        st.warning("Verifica que los 'Secrets' estén bien configurados en el panel de Streamlit.")
+        return pd.DataFrame() # Devuelve un DataFrame vacío si hay error
+        
 @st.cache_data(ttl=300)
 def get_data():
     df = load_sheet()
