@@ -58,7 +58,7 @@ def load_sheet():
         st.error(f"Error al conectar con Google Sheets: {e}")
         st.warning("Verifica que los 'Secrets' estén bien configurados en el panel de Streamlit.")
         return pd.DataFrame() # Devuelve un DataFrame vacío si hay error
-        
+
 @st.cache_data(ttl=300)
 def get_data():
     df = load_sheet()
@@ -178,20 +178,93 @@ with tabs[2]:
 # ---- Participación por Infoplazas ----
 with tabs[3]:
     st.subheader("Participación por Infoplazas")
-    if "#" in df_f and "Infoplaza" in df.columns:
+
+    # Verificar que las columnas necesarias existen en el dataframe filtrado
+    required_cols = ["#", "INFOPLAZAS", "CountSesión", "_cedula_norm", "_nombre_unificado"]
+    if all(col in df_f.columns for col in required_cols):
+        
+        # 1. PREPARACIÓN DE DATOS
+        # Crear un identificador único para cada infoplaza (ej: "132 - Pesé")
         df_f["InfoplazaFull"] = df_f["#"].astype(str) + " - " + df_f["INFOPLAZAS"]
-        tabla = df_f.groupby("InfoplazaFull").agg(
-            TotalSesiones=("CountSesión","count"),
-            SesionesUnicas=("CountSesión","nunique"),
-            DinamizadoresUnicos=("_cedula_norm","nunique")
+        
+        # 2. TABLA DE RESUMEN (para las cabeceras de los desplegables)
+        # Agrupa por infoplaza para obtener los totales generales
+        summary_table = df_f.groupby("InfoplazaFull").agg(
+            TotalSesiones=("CountSesión", "count"),
+            SesionesUnicas=("CountSesión", "nunique"),
+            DinamizadoresUnicos=("_cedula_norm", "nunique")
         ).reset_index()
-        # Infoplazas con 0
-        catalogo = df_f[["#","Infoplaza"]].drop_duplicates()
-        catalogo["InfoplazaFull"] = catalogo["#"].astype(str)+" - "+catalogo["Infoplaza"]
-        tabla = pd.merge(catalogo[["InfoplazaFull"]], tabla, on="InfoplazaFull", how="left").fillna(0)
-        show_only = st.checkbox("Mostrar solo sin participación")
+
+        # 3. TABLA DE DETALLES (para el contenido de los desplegables)
+        # Agrupa por infoplaza y por dinamizador para el desglose
+        detail_table = df_f.groupby(["InfoplazaFull", "_cedula_norm", "_nombre_unificado"]).agg(
+            TotalParticipacion=("CountSesión", "count"),
+            ParticipacionUnica=("CountSesión", "nunique")
+        ).reset_index().rename(columns={
+            "_cedula_norm": "Cédula", 
+            "_nombre_unificado": "Nombre del Dinamizador"
+        })
+
+        # 4. CATÁLOGO COMPLETO
+        # Nos aseguramos de incluir infoplazas con 0 participación según los filtros
+        # Usamos el dataframe original `df` para tener la lista completa siempre
+        catalogo_infoplazas = df[["#", "INFOPLAZAS"]].drop_duplicates().dropna()
+        catalogo_infoplazas["InfoplazaFull"] = catalogo_infoplazas["#"].astype(str) + " - " + catalogo_infoplazas["INFOPLAZAS"]
+        
+        # Unimos el catálogo con los datos de resumen
+        final_summary = pd.merge(
+            catalogo_infoplazas[["InfoplazaFull"]], 
+            summary_table, 
+            on="InfoplazaFull", 
+            how="left"
+        ).fillna(0)
+        
+        # Convertir columnas de conteo a enteros para una mejor visualización
+        for col in ["TotalSesiones", "SesionesUnicas", "DinamizadoresUnicos"]:
+            final_summary[col] = final_summary[col].astype(int)
+
+        # 5. FILTROS Y EXPORTACIÓN
+        show_only = st.checkbox("Mostrar solo infoplazas sin participación")
         if show_only:
-            tabla = tabla[tabla["TotalSesiones"]==0]
-        st.dataframe(tabla)
-        csv = tabla.to_csv(index=False).encode("utf-8")
-        st.download_button("⬇️ Exportar CSV", csv, "participacion_infoplazas.csv", "text/csv")
+            display_data = final_summary[final_summary["TotalSesiones"] == 0]
+        else:
+            # Ordenar por total de sesiones de mayor a menor
+            display_data = final_summary.sort_values("TotalSesiones", ascending=False)
+        
+        # Botón de descarga para el resumen
+        csv = display_data.to_csv(index=False).encode("utf-8")
+        st.download_button("⬇️ Exportar Resumen CSV", csv, "resumen_participacion_infoplazas.csv", "text/csv")
+        st.markdown("---")
+
+        # 6. RENDERIZADO DE LA VISTA DESPLEGABLE
+        # Iteramos sobre la tabla de resumen y creamos un expander por cada fila
+        detail_table.set_index("InfoplazaFull", inplace=True) # Para búsquedas rápidas
+        
+        for _, row in display_data.iterrows():
+            infoplaza_name = row["InfoplazaFull"]
+            
+            # Formateamos el título del expander con los datos de resumen
+            expander_label = (
+                f"{infoplaza_name} | **Total de Sesiones:** {row['TotalSesiones']} | "
+                f"**Sesiones Únicas:** {row['SesionesUnicas']} | "
+                f"**Dinamizadores Únicos:** {row['DinamizadoresUnicos']}"
+            )
+            
+            with st.expander(expander_label):
+                # Si hay participación, buscamos y mostramos los detalles
+                if row['TotalSesiones'] > 0 and row['DinamizadoresUnicos'] > 0:
+                    try:
+                        # Buscamos los dinamizadores correspondientes a esta infoplaza
+                        dinamizador_details = detail_table.loc[[infoplaza_name]]
+                        # Mostramos la tabla de detalles sin el índice
+                        st.dataframe(
+                            dinamizador_details[["Cédula", "Nombre del Dinamizador", "TotalParticipacion", "ParticipacionUnica"]].reset_index(drop=True)
+                        )
+                    except KeyError:
+                        st.warning("No se encontraron detalles de dinamizadores para esta infoplaza.")
+                else:
+                    st.info("Esta infoplaza no registra participación con los filtros actuales.")
+    
+    else:
+        # Mensaje de advertencia si falta alguna columna
+        st.warning("Faltan columnas necesarias para generar este reporte. Verifica la hoja de Google Sheets.")
