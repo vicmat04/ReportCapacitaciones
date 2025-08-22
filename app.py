@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+from google.oauth2.service_account import Credentials
 import plotly.express as px
 import re
 import gspread
@@ -9,7 +10,6 @@ from io import StringIO
 # ---------------- CONFIG ----------------
 SHEET_ID = "16PzfegYvX0ywjOZ0zh3MS9-xxNBNugeMeXGLDqykQRs"
 SHEET_NAME = "Respuestas de formulario 1"
-SERVICE_ACCOUNT_FILE = "service_account.json"
 
 st.set_page_config(page_title="Informe Dinamizadores", layout="wide")
 
